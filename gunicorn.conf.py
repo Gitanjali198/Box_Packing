@@ -1,8 +1,8 @@
 """Gunicorn production configuration optimized for Railway / container environments."""
 import os
 
-# Railway injects the port dynamically (default 8080 or 5000)
-port = os.environ.get("PORT", "5000")
+# Railway injects the port dynamically (default 8080)
+port = os.environ.get("PORT", "8080")
 bind = f"0.0.0.0:{port}"
 
 # Railway Free/Starter tier has a 512 MB memory limit.
