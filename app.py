@@ -165,9 +165,13 @@ def export(jid):
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
+
 if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
-    port = int(os.environ.get("PORT", "5000"))
-    print(f"\n  Kwik Patch Carton Packing System\n  Open  http://127.0.0.1:{port}  in your browser\n")
-    app.run(host="127.0.0.1", port=port, debug=False, threaded=True)
+
+    port = int(os.environ.get("PORT", "8080"))
+
+    print(f"\n  Kwik Patch Carton Packing System\n  Running on port {port}\n")
+
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
