@@ -56,6 +56,7 @@ def build_workbook(res: dict) -> bytes:
         ("Orientation rule", "All boxes in a carton in ONE direction" if res["settings"]["mode"] == "uniform"
          else "One direction per product inside a carton"),
         ("Cartons allowed for mixed packing", ", ".join(res.get("allowed_cartons", []))),
+        ("Carton calculation size", f"Outer carton dimensions reduced by {res['settings'].get('carton_reduction_inch', 1.0):g} inch (L, W, H) for internal usable space"),
     ]
     for i, (k, v) in enumerate(rows, start=5):
         ws.cell(row=i, column=1, value=k).font = Font(bold=True)

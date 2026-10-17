@@ -77,10 +77,14 @@ function resolvedInfo(e) {
   const r = e.resolution; if (!r) return '';
   if (r.type === 'master') {
     const it = e.suggest && e.suggest.row === r.row ? e.suggest : (e.picked || null);
-    if (it) return `<b>${esc(it.name)}</b><br><small>${dimTxt(it)} &middot; ${it.inner_per_carton}/carton in ${esc(it.carton)}</small>`;
+    if (it) {
+      const topBadge = it.top_up ? ' <span class="chip ok" style="padding:1px 6px;font-size:10px">&#8679; Top side up (Versa)</span>' : '';
+      return `<b>${esc(it.name)}</b>${topBadge}<br><small>${dimTxt(it)} &middot; ${it.inner_per_carton}/carton in ${esc(it.carton)}</small>`;
+    }
     return `master row ${r.row}`;
   }
-  return `<b>Manual box</b><br><small>${r.l}&times;${r.w}&times;${r.h} mm (+${r.margin ?? 2} margin)${r.per_carton ? ' &middot; ' + r.per_carton + '/carton' : ''}</small>`;
+  const topBadge = r.top_up ? ' <span class="chip ok" style="padding:1px 6px;font-size:10px">&#8679; Top side up (Versa)</span>' : '';
+  return `<b>Manual box</b>${topBadge}<br><small>${r.l}&times;${r.w}&times;${r.h} mm (+${r.margin ?? 2} margin)${r.per_carton ? ' &middot; ' + r.per_carton + '/carton' : ''}</small>`;
 }
 const dimTxt = it => it.has_dims ? `${it.l}&times;${it.w}&times;${it.h} mm &middot; ${it.units_per_inner} units/box` : 'no box size in master';
 function renderItems() {
@@ -170,6 +174,7 @@ function openManual(en) {
       <label class="field">Safety margin added (mm)<input id="mM" type="number" step="0.5" value="${prev.margin ?? 2}"></label>
       <label class="field">Boxes per FULL carton <small>(blank = calculate)</small><input id="mP" type="number" value="${prev.per_carton ?? ''}"></label>
       <label class="field">Full-carton type<select id="mC"><option value="">Auto (best fit)</option>${opts}</select></label>
+      <label class="chk full" style="margin:0"><input type="checkbox" id="mTopUp" ${prev.top_up ? 'checked' : ''}> &#8679; Top side facing upward (Versa patch)</label>
       <label class="chk full" style="margin:0"><input type="checkbox" id="mS" checked> Remember this box size for future PIs</label>
     </div>
     <p class="muted" style="font-size:12px">Measure the inner box (outside size). The margin is added to every side-dimension so the plan has a little slack.</p>
@@ -177,7 +182,7 @@ function openManual(en) {
   $('#mOk').addEventListener('click', async () => {
     const l = +$('#mL').value, w = +$('#mW').value, h = +$('#mH').value;
     if (!(l > 0 && w > 0 && h > 0)) return alert('Please enter length, width and height.');
-    const spec = { l, w, h, margin: +$('#mM').value || 0, per_carton: +$('#mP').value || null, carton_key: $('#mC').value || null };
+    const spec = { l, w, h, margin: +$('#mM').value || 0, per_carton: +$('#mP').value || null, carton_key: $('#mC').value || null, top_up: $('#mTopUp').checked };
     en.resolution = Object.assign({ type: 'custom' }, spec); en.skip = false;
     if ($('#mS').checked) { try { await post('/api/item/custom', { line: en.line, spec }); } catch (e) {} }
     closeModal(); renderItems();
@@ -190,8 +195,11 @@ function renderSettings() {
   const allowed = new Set(state.allowed || state.info.default_allowed);
   state.allowed = Array.from(allowed);
   const cs = state.info.cartons.slice().sort((a, b) => (b.usage - a.usage) || (a.l_in * a.w_in * a.h_in - b.l_in * b.w_in * b.h_in));
-  $('#cartonList').innerHTML = cs.map(c => `<label class="${allowed.has(c.key) ? 'on' : ''}"><input type="checkbox" value="${c.key}" ${allowed.has(c.key) ? 'checked' : ''}>
-     <span><b>${esc(c.name)}</b><br><small>${c.label} in &middot; ${(c.l_in * 25.4).toFixed(0)}&times;${(c.w_in * 25.4).toFixed(0)}&times;${(c.h_in * 25.4).toFixed(0)} mm${c.usage ? ' &middot; used by ' + c.usage + ' products' : ''}</small></span></label>`).join('');
+  $('#cartonList').innerHTML = cs.map(c => {
+    const calcStr = c.calc_label || `${(c.l_in - 1)} x ${(c.w_in - 1)} x ${(c.h_in - 1)}`;
+    return `<label class="${allowed.has(c.key) ? 'on' : ''}"><input type="checkbox" value="${c.key}" ${allowed.has(c.key) ? 'checked' : ''}>
+     <span><b>${esc(c.name)}</b><br><small>${c.label} in (calc: ${calcStr} in)${c.usage ? ' &middot; ' + c.usage + ' products' : ''}</small></span></label>`;
+  }).join('');
   $$('#cartonList input').forEach(i => i.addEventListener('change', () => { i.parentElement.classList.toggle('on', i.checked); }));
 }
 $('#ccAdd').addEventListener('click', async () => {
@@ -208,7 +216,10 @@ async function startCalc() {
   state.allowed = keys;
   const settings = {
     mode: $('input[name=mode]:checked').value, upright_only: $('#upright').checked,
-    carton_tolerance_mm: +$('#tol').value || 0, allowed_cartons: keys,
+    fill_full_cartons: $('input[name=fullCartonCap]:checked') ? $('input[name=fullCartonCap]:checked').value === 'geom' : true,
+    carton_tolerance_mm: +$('#tol').value || 0,
+    carton_reduction_inch: $('#cartonReduction') ? (+$('#cartonReduction').value || 1.0) : 1.0,
+    allowed_cartons: keys,
     min_fill: (+$('#minFill').value || 75) / 100, time_budget: +$('#timeBudget').value
   };
   const lines = state.entries.map(e => ({ line: e.line, resolution: e.resolution, skip: e.skip }));
@@ -287,12 +298,18 @@ function showFull(i) {
   const f = state.result.full[i], el = $('#fullDetail');
   if (!f.layout || !f.layout.achieved) {
     if (state.scene) { state.scene.dispose(); state.scene = null; }
-    el.innerHTML = `<h3>${esc(fullCj(f).title)}</h3><p class="muted">Master says ${f.boxes_per_carton} boxes per carton (${fmt(f.units_per_carton)} units) in ${esc(f.carton.name)} (${esc(f.carton_label_in)} in).</p><div class="warnbox">&#9888; ${esc(f.note || 'A 3D layout could not be generated for this product - pack as per the master standard.')}</div>`;
+    el.innerHTML = `<h3>${esc(fullCj(f).title)}</h3><p class="muted">Master says ${f.boxes_per_carton} boxes per carton (${fmt(f.units_per_carton)} units) in ${esc(f.carton.name)} (${esc(f.carton_label_in)} in &middot; ${f.carton.l.toFixed(0)} &times; ${f.carton.w.toFixed(0)} &times; ${f.carton.h.toFixed(0)} mm).</p><div class="warnbox">&#9888; ${esc(f.note || 'A 3D layout could not be generated for this product - pack as per the master standard.')}</div>`;
     return;
   }
   const cj = fullCj(f);
   mountDetail(el, cj, 'full');
-  if (f.note) el.insertAdjacentHTML('afterbegin', `<div class="warnbox" style="margin-bottom:8px">&#9888; ${esc(f.note)}</div>`);
+  if (f.note) {
+    const isUnder = f.layout && f.layout.achieved < f.boxes_per_carton;
+    const noteHtml = isUnder
+      ? `<div class="warnbox" style="margin-bottom:8px">&#9888; ${esc(f.note)}</div>`
+      : `<div style="margin-bottom:8px;padding:8px 12px;background:rgba(46,125,50,.1);border:1px solid rgba(46,125,50,.3);border-radius:6px;color:#1b5e20;font-size:13px">&#10004; <b>Full carton packing:</b> ${esc(f.note)}</div>`;
+    el.insertAdjacentHTML('afterbegin', noteHtml);
+  }
 }
 
 function renderMixed() {
@@ -330,7 +347,8 @@ function mountDetail(el, cj, kind) {
   $('#legend', el).innerHTML = cj.contents.map((c, i) => {
     const col = colorOfIdx(c.sku);
     const icons = c.orientations.map(o => isoIcon(o.extent, o.perm, col, 104)).join('');
-    return `<div class="leg"><div class="sw" style="background:${col}">${i + 1}</div><div><b>${esc(c.name)}</b> <small>${esc(c.code || '')}</small><br><b>${c.boxes}</b> inner boxes &middot; ${fmt(c.units)} units<br><span class="ori">${c.dims.map(d => d.toFixed(0)).join(' &times; ')} mm (L&times;W&times;H)<br>${c.orientations.map(o => esc(o.text)).join('<br>')}</span></div><div>${icons}</div></div>`;
+    const topBadge = c.top_up ? ' <span class="chip ok" style="padding:1px 6px;font-size:10px">&#8679; Top side facing upward (Versa patch)</span>' : '';
+    return `<div class="leg"><div class="sw" style="background:${col}">${i + 1}</div><div><b>${esc(c.name)}</b> <small>${esc(c.code || '')}</small>${topBadge}<br><b>${c.boxes}</b> inner boxes &middot; ${fmt(c.units)} units<br><span class="ori">${c.dims.map(d => d.toFixed(0)).join(' &times; ')} mm (L&times;W&times;H)<br>${c.orientations.map(o => esc(o.text)).join('<br>')}</span></div><div>${icons}</div></div>`;
   }).join('');
   // layers
   let prev = [];
@@ -382,7 +400,8 @@ $('#printBtn').addEventListener('click', async () => {
     const layers = m.layers.map(L => { const svg = layerSVG(m.carton, L, prev, colorOfIdx, badgeOf, 320); prev = prev.concat(L.items);
       return `<div class="layer"><h4>Layer ${L.no} <small>(${L.count} boxes)</small></h4>${svg}<ul>${L.items.map(it => `<li><span class="pill" style="background:${colorOfIdx(it.sku)}">${badgeOf(it.sku)}</span><span><b>${it.count}</b> &times; ${esc(nameOfIdx(it.sku))}<br><small>${orientTxt(it)}</small></span></li>`).join('')}</ul></div>`; }).join('');
     const leg = m.contents.map((c, i) => `<div class="leg" style="grid-template-columns:30px 1fr 110px"><div class="sw" style="background:${colorOfIdx(c.sku)}">${i + 1}</div><div><b>${esc(c.name)}</b> <small>${esc(c.code || '')}</small><br><b>${c.boxes}</b> boxes (${fmt(c.units)} units)<br><span class="ori">${esc(c.orientations.map(o => o.text).join(' | '))}</span></div><div>${c.orientations.map(o => isoIcon(o.extent, o.perm, colorOfIdx(c.sku), 96)).join('')}</div></div>`).join('');
-    pa.insertAdjacentHTML('beforeend', `<div class="pcarton"><h2>${esc(h)} - ${esc(m.carton.name)} (${m.carton.label || ''} in) &middot; ${(m.fill * 100).toFixed(0)}% full</h2>
+    const calcSub = m.carton.calc_label ? ` &middot; Usable: ${m.carton.calc_label} in` : '';
+    pa.insertAdjacentHTML('beforeend', `<div class="pcarton"><h2>${esc(h)} - ${esc(m.carton.name)} (Outer: ${m.carton.label || ''} in${calcSub}) &middot; ${(m.fill * 100).toFixed(0)}% full</h2>
       <img src="${img}"><div class="legend" style="margin:8px 0">${leg}</div><div class="layers">${layers}</div></div>`);
   }
   setTimeout(() => window.print(), 300);

@@ -16,12 +16,29 @@ from packer.service import DATA, MASTER_PATH, UPLOADS, Service
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 import multiprocessing
-svc = Service() if multiprocessing.current_process().name == "MainProcess" else None
+_svc = None
+
+def get_svc() -> Service:
+    global _svc
+    if _svc is None:
+        _svc = Service()
+    return _svc
+
+class _LazyServiceProxy:
+    def __getattr__(self, name):
+        return getattr(get_svc(), name)
+
+svc = _LazyServiceProxy()
+
+
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok", "service": "kwik_packer"}), 200
 
 
 @app.route("/")
 def index():
-    return send_from_directory("static", "index.html")
+    return send_from_directory(app.static_folder, "index.html")
 
 
 @app.route("/api/info")
@@ -165,13 +182,10 @@ def export(jid):
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
-
 if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
-
-    port = int(os.environ.get("PORT", "8080"))
-
-    print(f"\n  Kwik Patch Carton Packing System\n  Running on port {port}\n")
-
-    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+    port = int(os.environ.get("PORT", "5000"))
+    host = os.environ.get("HOST", "0.0.0.0")
+    print(f"\n  Kwik Patch Carton Packing System\n  Running on http://{host}:{port}\n")
+    app.run(host=host, port=port, debug=False, threaded=True)

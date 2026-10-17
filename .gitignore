@@ -1,0 +1,26 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Testing
+.pytest_cache/
+.coverage
+
+# Temporary uploads (preserve folder with .gitkeep)
+kwik_packer/uploads/*
+!kwik_packer/uploads/.gitkeep
+
+# System & Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

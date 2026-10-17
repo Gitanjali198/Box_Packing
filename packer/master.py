@@ -42,6 +42,7 @@ class MasterItem:
     inner_per_carton: Optional[int]
     carton_key: str      # key of the home outer carton
     carton_label: str
+    top_up: bool = False # inner box must be positioned with top side facing upward (Versa patch)
 
     def issues(self):
         """Human-readable list of what is missing/invalid in this master row."""
@@ -66,6 +67,9 @@ class MasterItem:
         return d
 
 
+CARTON_REDUCTION_INCH = 1.0
+
+
 @dataclass
 class CartonSpec:
     key: str
@@ -76,26 +80,79 @@ class CartonSpec:
     usage: int = 0
 
     @property
+    def calc_l_in(self) -> float:
+        return max(0.1, round(self.l_in - CARTON_REDUCTION_INCH, 2))
+
+    @property
+    def calc_w_in(self) -> float:
+        return max(0.1, round(self.w_in - CARTON_REDUCTION_INCH, 2))
+
+    @property
+    def calc_h_in(self) -> float:
+        return max(0.1, round(self.h_in - CARTON_REDUCTION_INCH, 2))
+
+    @property
     def l(self):
+        """Actual outer length in mm (used for 3D display and specs)."""
         return round(self.l_in * MM_PER_INCH, 1)
 
     @property
     def w(self):
+        """Actual outer width in mm (used for 3D display and specs)."""
         return round(self.w_in * MM_PER_INCH, 1)
 
     @property
     def h(self):
+        """Actual outer height in mm (used for 3D display and specs)."""
         return round(self.h_in * MM_PER_INCH, 1)
+
+    @property
+    def outer_l(self):
+        """Nominal outer length in mm."""
+        return round(self.l_in * MM_PER_INCH, 1)
+
+    @property
+    def outer_w(self):
+        """Nominal outer width in mm."""
+        return round(self.w_in * MM_PER_INCH, 1)
+
+    @property
+    def outer_h(self):
+        """Nominal outer height in mm."""
+        return round(self.h_in * MM_PER_INCH, 1)
+
+    @property
+    def calc_l(self):
+        """Usable internal length in mm for 3D calculation."""
+        return round(self.calc_l_in * MM_PER_INCH, 1)
+
+    @property
+    def calc_w(self):
+        """Usable internal width in mm for 3D calculation."""
+        return round(self.calc_w_in * MM_PER_INCH, 1)
+
+    @property
+    def calc_h(self):
+        """Usable internal height in mm for 3D calculation."""
+        return round(self.calc_h_in * MM_PER_INCH, 1)
 
     @property
     def label(self):
         f = lambda x: ("%g" % x)
         return f"{f(self.l_in)} x {f(self.w_in)} x {f(self.h_in)}"
 
+    @property
+    def calc_label(self):
+        f = lambda x: ("%g" % x)
+        return f"{f(self.calc_l_in)} x {f(self.calc_w_in)} x {f(self.calc_h_in)}"
+
     def to_dict(self):
         return {"key": self.key, "name": self.name, "l_in": self.l_in, "w_in": self.w_in,
-                "h_in": self.h_in, "l": self.l, "w": self.w, "h": self.h,
-                "label": self.label, "usage": self.usage}
+                "h_in": self.h_in, "calc_l_in": self.calc_l_in, "calc_w_in": self.calc_w_in,
+                "calc_h_in": self.calc_h_in, "l": self.l, "w": self.w, "h": self.h,
+                "outer_l": self.outer_l, "outer_w": self.outer_w, "outer_h": self.outer_h,
+                "calc_l": self.calc_l, "calc_w": self.calc_w, "calc_h": self.calc_h,
+                "label": self.label, "calc_label": self.calc_label, "usage": self.usage}
 
 
 @dataclass
@@ -127,16 +184,44 @@ def load_master(path: str, sheet: str = "Main data") -> Master:
     usage = Counter()
     dims_by_key = {}
 
+    # Inspect row 2 headers to detect optional Top Side / Versa column
+    header_row = [str(cell.value or "").strip() for cell in ws[2]] if ws.max_row >= 2 else []
+    top_col = None
+    for c_i, h in enumerate(header_row):
+        hu = h.upper()
+        if "TOP SIDE" in hu or "VERSA" in hu or "HEAD" in hu:
+            top_col = c_i
+            break
+
     for r_idx, row in enumerate(ws.iter_rows(min_row=3, values_only=True), start=3):
-        if not row or len(row) < 14:
+        if not row:
             continue
-        code, name = row[0], row[1]
-        if name is None and code is None:
-            continue
-        l, w, h = (to_float(row[3]), to_float(row[4]), to_float(row[5]))
-        upi = to_float(row[6])
-        ipc = to_float(row[7])
-        cl, cw, ch = to_float(row[10]), to_float(row[11]), to_float(row[12])
+        if top_col is not None and len(row) > top_col:
+            code = row[0]
+            top_val = row[top_col]
+            top_up = bool(top_val and str(top_val).strip().upper() not in ("", "0", "FALSE", "NO", "N", "NONE"))
+            name = row[2] if len(row) > 2 else None
+            l = to_float(row[4]) if len(row) > 4 else None
+            w = to_float(row[5]) if len(row) > 5 else None
+            h = to_float(row[6]) if len(row) > 6 else None
+            upi = to_float(row[7]) if len(row) > 7 else None
+            ipc = to_float(row[8]) if len(row) > 8 else None
+            cl = to_float(row[11]) if len(row) > 11 else None
+            cw = to_float(row[12]) if len(row) > 12 else None
+            ch = to_float(row[13]) if len(row) > 13 else None
+            raw_label = str(row[14]).strip() if len(row) > 14 and row[14] else ""
+        else:
+            if len(row) < 14:
+                continue
+            code = row[0]
+            top_up = False
+            name = row[1]
+            l, w, h = (to_float(row[3]), to_float(row[4]), to_float(row[5]))
+            upi = to_float(row[6])
+            ipc = to_float(row[7])
+            cl, cw, ch = to_float(row[10]), to_float(row[11]), to_float(row[12])
+            raw_label = str(row[13]).strip() if len(row) > 13 and row[13] else ""
+
         if name is None and code is None:
             continue
         if (l is not None and l <= 0) or (w is not None and w <= 0) or (h is not None and h <= 0):
@@ -144,7 +229,7 @@ def load_master(path: str, sheet: str = "Main data") -> Master:
         if cl and cw and ch:
             key = _carton_key(cl, cw, ch)
             dims_by_key[key] = (cl, cw, ch)
-            label = str(row[13]).strip() if row[13] else key
+            label = raw_label or key
             names_by_key[key][re.sub(r"\s+", "", label).upper()] += 1
             usage[key] += 1
         else:
@@ -158,7 +243,8 @@ def load_master(path: str, sheet: str = "Main data") -> Master:
             l=l, w=w, h=h,
             units_per_inner=int(upi) if upi else None,
             inner_per_carton=int(ipc) if ipc and ipc > 0 else None,
-            carton_key=key, carton_label=label))
+            carton_key=key, carton_label=label,
+            top_up=top_up))
 
     for key, (cl, cw, ch) in dims_by_key.items():
         best = names_by_key[key].most_common(1)[0][0]

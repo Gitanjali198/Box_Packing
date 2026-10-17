@@ -9,7 +9,7 @@ import time
 import uuid
 from typing import Optional
 
-from .master import Master, MasterItem, load_master, norm
+from .master import CARTON_REDUCTION_INCH, MM_PER_INCH, Master, MasterItem, load_master, norm
 from .matcher import Matcher
 from .pi_parser import PIDoc, list_sheets, parse_pi
 from .planner import Settings, plan
@@ -55,10 +55,29 @@ class Service:
     def cartons(self) -> dict:
         out = {}
         for k, c in self.master.cartons.items():
-            out[k] = {"key": k, "name": c.name, "l_in": c.l_in, "w_in": c.w_in, "h_in": c.h_in,
-                      "usage": c.usage, "label": c.label}
+            out[k] = c.to_dict()
         for k, c in self.custom_cartons.items():
-            out[k] = dict(c, usage=0, label=f"{c['l_in']:g} x {c['w_in']:g} x {c['h_in']:g}", custom=True)
+            l_in, w_in, h_in = float(c["l_in"]), float(c["w_in"]), float(c["h_in"])
+            calc_l_in = max(0.1, round(l_in - CARTON_REDUCTION_INCH, 2))
+            calc_w_in = max(0.1, round(w_in - CARTON_REDUCTION_INCH, 2))
+            calc_h_in = max(0.1, round(h_in - CARTON_REDUCTION_INCH, 2))
+            out[k] = {
+                "key": k, "name": c["name"],
+                "l_in": l_in, "w_in": w_in, "h_in": h_in,
+                "calc_l_in": calc_l_in, "calc_w_in": calc_w_in, "calc_h_in": calc_h_in,
+                "l": round(l_in * MM_PER_INCH, 1),
+                "w": round(w_in * MM_PER_INCH, 1),
+                "h": round(h_in * MM_PER_INCH, 1),
+                "outer_l": round(l_in * MM_PER_INCH, 1),
+                "outer_w": round(w_in * MM_PER_INCH, 1),
+                "outer_h": round(h_in * MM_PER_INCH, 1),
+                "calc_l": round(calc_l_in * MM_PER_INCH, 1),
+                "calc_w": round(calc_w_in * MM_PER_INCH, 1),
+                "calc_h": round(calc_h_in * MM_PER_INCH, 1),
+                "label": f"{l_in:g} x {w_in:g} x {h_in:g}",
+                "calc_label": f"{calc_l_in:g} x {calc_w_in:g} x {calc_h_in:g}",
+                "usage": 0, "custom": True
+            }
         return out
 
     def default_allowed(self):
@@ -149,12 +168,13 @@ class Service:
                 "has_highlight": doc.has_highlight}
 
     def save_custom_item(self, line, spec, remember_master_row=None):
-        """spec: {l,w,h (raw mm), per_carton|None, carton_key|None}"""
+        """spec: {l,w,h (raw mm), per_carton|None, carton_key|None, top_up|False}"""
         ck = self._custom_key(line)
         self.custom_items[ck] = {"code": line["code"], "name": line["name"], "upb": line["units_per_box"],
                                  "l": float(spec["l"]), "w": float(spec["w"]), "h": float(spec["h"]),
                                  "per_carton": int(spec["per_carton"]) if spec.get("per_carton") else None,
                                  "carton_key": spec.get("carton_key") or None,
+                                 "top_up": bool(spec.get("top_up")),
                                  "margin": float(spec.get("margin", DEFAULT_MARGIN_MM))}
         _save_json(CUSTOM_ITEMS, self.custom_items)
 
@@ -191,6 +211,7 @@ class Service:
                               "boxes": ln["boxes"], "upb": ln["units_per_box"],
                               "l": it.l + settings_adjust, "w": it.w + settings_adjust, "h": it.h + settings_adjust,
                               "per_carton": it.inner_per_carton, "carton_key": it.carton_key,
+                              "top_up": it.top_up,
                               "source": f"master row {it.row}"})
             else:
                 m = float(res.get("margin", DEFAULT_MARGIN_MM)) + settings_adjust
@@ -198,7 +219,9 @@ class Service:
                               "boxes": ln["boxes"], "upb": ln["units_per_box"],
                               "l": float(res["l"]) + m, "w": float(res["w"]) + m, "h": float(res["h"]) + m,
                               "per_carton": int(res["per_carton"]) if res.get("per_carton") else None,
-                              "carton_key": res.get("carton_key") or None, "source": "manual item"})
+                              "carton_key": res.get("carton_key") or None,
+                              "top_up": bool(res.get("top_up")),
+                              "source": "manual item"})
         return specs, skipped
 
     def start_job(self, lines, settings_dict, margin_adjust=0.0, meta=None):
@@ -232,7 +255,7 @@ class Service:
 
 
     # ------------------------------------------------------------------ master maintenance helpers
-    HEADERS = ["ITEM CODE", "ITEM", "Inner Box Size in mm", "L", "W", "H", "ONE INNER BOX Under Patch QTY",
+    HEADERS = ["ITEM CODE", "Top Side Head", "ITEM", "Inner Box Size in mm", "L", "W", "H", "ONE INNER BOX Under Patch QTY",
                "ONE OUTER BOX               UNDER INNER BOX QTY.)", "ONE OUTER Under Patch QTY.",
                "OUTER BOX SIZE In Inch", "L", "W", "H", "NAME OF OUTER"]
 
@@ -254,23 +277,25 @@ class Service:
             ln = e["line"]; sug = e.get("suggest") or {}
             it = next((x for x in self.master.items if x.row == sug.get("row")), None)
             probs = "; ".join(i["msg"] for i in e.get("issues", []) if i["level"] in ("error", "warn")) or "check"
-            vals = [ln["code"] or (it.code if it else ""), it.name if it else ln["name"], "", None, None, None,
+            vals = [ln["code"] or (it.code if it else ""),
+                    "Top Side Head" if (it and it.top_up) else "",
+                    it.name if it else ln["name"], "", None, None, None,
                     (it.units_per_inner if it and it.units_per_inner else ln["units_per_box"]),
                     it.inner_per_carton if it else None, None, "", None, None, None, ""]
             if it:
                 if it.has_dims:
-                    vals[3:6] = [it.l, it.w, it.h]
+                    vals[4:7] = [it.l, it.w, it.h]
                 if it.carton_key and it.carton_key in self.master.cartons:
                     c = self.master.cartons[it.carton_key]
-                    vals[9:14] = [c.label, c.l_in, c.w_in, c.h_in, c.name]
+                    vals[10:15] = [c.label, c.l_in, c.w_in, c.h_in, c.name]
             for c, v in enumerate(vals, 1):
                 cell = ws.cell(row=r, column=c, value=v)
-                if v in (None, ""):
+                if v in (None, "") and c != 2:
                     cell.fill = yellow
-            ws.cell(row=r, column=15, value=probs)
-            ws.cell(row=r, column=16, value=f"{ln['name']} (qty/box {ln['units_per_box']}, {ln['boxes']} boxes)")
+            ws.cell(row=r, column=16, value=probs)
+            ws.cell(row=r, column=17, value=f"{ln['name']} (qty/box {ln['units_per_box']}, {ln['boxes']} boxes)")
             r += 1
-        for col, w in zip("ABCDEFGHIJKLMNOP", [12, 36, 20, 8, 8, 8, 14, 16, 12, 20, 8, 8, 8, 14, 70, 44]):
+        for col, w in zip("ABCDEFGHIJKLMNOPQ", [12, 14, 36, 20, 8, 8, 8, 14, 16, 12, 20, 8, 8, 8, 14, 70, 44]):
             ws.column_dimensions[col].width = w
         buf = io.BytesIO(); wb.save(buf); return buf.getvalue()
 
@@ -286,7 +311,8 @@ class Service:
             upi = ci.get("upb")
             ipc = ci.get("per_carton")
             cs = self.cartons().get(ci.get("carton_key") or "")
-            row = [ci.get("code") or None, ci.get("name"), f"{ci['l']:g} X {ci['w']:g} X {ci['h']:g}",
+            top_val = "Top Side Head" if ci.get("top_up") else None
+            row = [ci.get("code") or None, top_val, ci.get("name"), f"{ci['l']:g} X {ci['w']:g} X {ci['h']:g}",
                    ci["l"] + m, ci["w"] + m, ci["h"] + m, upi, ipc, (upi * ipc if upi and ipc else None),
                    cs and f"{cs['l_in']:g} x {cs['w_in']:g} x {cs['h_in']:g}", cs and cs["l_in"], cs and cs["w_in"],
                    cs and cs["h_in"], cs and cs["name"]]

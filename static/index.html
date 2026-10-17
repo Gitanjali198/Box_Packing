@@ -79,6 +79,14 @@
         <span><b>One direction per product</b><br>
         <small>All boxes of the same product share a direction; different products may face differently. May save a few more cartons.</small></span></label>
       <label class="chk"><input type="checkbox" id="upright"> Keep every box upright (height stays vertical, never laid on its side)</label>
+      <hr style="border:none;border-top:1px solid var(--line);margin:14px 0">
+      <h3>Full carton capacity</h3>
+      <label class="radio"><input type="radio" name="fullCartonCap" value="geom" checked>
+        <span><b>Fill cartons completely (3D geometric capacity)</b> (recommended)<br>
+        <small>Every full carton is 100% perfectly filled to maximum capacity with zero empty space. Leftover inner boxes are added to mixed cartons.</small></span></label>
+      <label class="radio"><input type="radio" name="fullCartonCap" value="master">
+        <span><b>Strict master sheet quantity</b><br>
+        <small>Use exact "Boxes per carton" count from master.xlsx (may leave empty space in cartons).</small></span></label>
     </div>
     <div class="card">
       <h3>Quality &amp; tolerance</h3>
@@ -88,13 +96,15 @@
         <input type="number" id="minFill" value="75" min="30" max="100"></label>
       <label class="field">Carton tolerance (mm) <small>extra room added to each carton dimension (0 = strict)</small>
         <input type="number" id="tol" value="0" step="0.5"></label>
+      <label class="field">Carton size reduction (inches) <small>subtracted from outer L, W, H for 3D calculation (default 1 inch)</small>
+        <input type="number" id="cartonReduction" value="1" min="0" max="5" step="0.25"></label>
       <label class="field">Box size adjustment (mm) <small>added to every inner-box dimension (master already includes +2 mm margin)</small>
         <input type="number" id="adj" value="0" step="0.5"></label>
     </div>
   </div>
   <div class="card">
     <h3>Cartons available for mixed (leftover) packing</h3>
-    <p class="muted">The solver picks the best carton for every mixed carton from the ticked sizes (smaller choice = less freight).</p>
+    <p class="muted">The solver picks the best carton for every mixed carton from the ticked sizes. Outer carton sizes are reduced by 1 inch (L, W, H) for 3D calculations to fit usable internal space.</p>
     <div id="cartonList" class="cartons"></div>
     <details><summary>Add a custom carton size</summary>
       <div class="row gap wrap" style="margin-top:8px">

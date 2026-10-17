@@ -159,7 +159,7 @@ def gap_fill(cartons, skus, mode, upright_only, item_vol, deadline=None):
                             perms = {b[1] for b in tgt["boxes"] if b[0] == sku}
                             if not perms:
                                 perms = {i for i, p in enumerate(PERMS_ALL) if (not upright_only or p[2] == 2)}
-                        if upright_only:
+                        if upright_only or getattr(skus[sku], "top_up", False):
                             perms = {p for p in perms if PERMS_ALL[p][2] == 2}
                         d = skus[sku].dims_s
                         placed = None

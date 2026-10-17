@@ -11,7 +11,7 @@ from typing import Optional
 import numpy as np
 
 from .engine import (AXIS_NAME, PERMS_ALL, SCALE, Block, CType, Carton, Packer, Sku, S,
-                     best_grid_count, expand_boxes, full_carton_layout, max_capacity, optimize, validate_carton)
+                     best_grid_count, expand_boxes, full_carton_layout, optimize, validate_carton)
 from .gapfill import compress_boxes, gap_fill
 
 MM_PER_INCH = 25.4
@@ -21,7 +21,9 @@ MM_PER_INCH = 25.4
 class Settings:
     mode: str = "uniform"            # 'uniform' (all boxes same direction) | 'per_product'
     upright_only: bool = False       # keep box height vertical ("this side up")
+    fill_full_cartons: bool = True   # fill full cartons completely to 3D geometric capacity (no empty space)
     carton_tolerance_mm: float = 0.0  # extra usable room added to each carton dimension
+    carton_reduction_inch: float = 1.0  # outer carton size (L, W, H) reduced by this many inches for 3D calculation
     allowed_cartons: Optional[list] = None
     min_fill: float = 0.75           # cartons below this fill are flagged
     time_budget: float = 20.0
@@ -140,6 +142,7 @@ def carton_json(c: Carton, skus, spec_by_idx, number=None, sku_map=None):
         cont.append({"sku": sk, "code": s.code, "name": s.name, "boxes": e["boxes"],
                      "units_per_inner": s.units_per_inner, "units": e["boxes"] * s.units_per_inner,
                      "dims": [s.l, s.w, s.h],
+                     "top_up": getattr(s, "top_up", False),
                      "orientations": [orientation_info(s, p) for p in sorted(e["perms"])]})
     # steps: one per block (bottom to top)
     steps = []
@@ -170,10 +173,19 @@ def carton_json(c: Carton, skus, spec_by_idx, number=None, sku_map=None):
             st["sku"] = sku_map[st["sku"]]
         for x in cont:
             x["sku"] = sku_map[x["sku"]]
+    actual_l = round(c.ctype.outer_l_in * MM_PER_INCH, 1) if c.ctype.outer_l_in else X / SCALE
+    actual_w = round(c.ctype.outer_w_in * MM_PER_INCH, 1) if c.ctype.outer_w_in else Y / SCALE
+    actual_h = round(c.ctype.outer_h_in * MM_PER_INCH, 1) if c.ctype.outer_h_in else Z / SCALE
     return {
         "no": number,
-        "carton": {"key": c.ctype.key, "name": c.ctype.name, "l": X / SCALE, "w": Y / SCALE, "h": Z / SCALE,
-                   "label": c.ctype.label},
+        "carton": {"key": c.ctype.key, "name": c.ctype.name,
+                   "l": actual_l, "w": actual_w, "h": actual_h,
+                   "calc_l": X / SCALE, "calc_w": Y / SCALE, "calc_h": Z / SCALE,
+                   "label": c.ctype.label,
+                   "outer_label": c.ctype.label,
+                   "calc_label": f"{c.ctype.calc_l_in:g} X {c.ctype.calc_w_in:g} X {c.ctype.calc_h_in:g}" if c.ctype.calc_l_in else f"{X/SCALE/MM_PER_INCH:.1f} X {Y/SCALE/MM_PER_INCH:.1f} X {Z/SCALE/MM_PER_INCH:.1f}",
+                   "outer_l_in": c.ctype.outer_l_in, "outer_w_in": c.ctype.outer_w_in, "outer_h_in": c.ctype.outer_h_in,
+                   "calc_l_in": c.ctype.calc_l_in, "calc_w_in": c.ctype.calc_w_in, "calc_h_in": c.ctype.calc_h_in},
         "fill": round(c.fill, 4),
         "boxes": sum(x["boxes"] for x in cont),
         "units": sum(x["units"] for x in cont),
@@ -194,11 +206,20 @@ def plan(specs, carton_specs, settings: Settings, progress=None):
     t0 = time.time()
     warnings = []
     tol = settings.carton_tolerance_mm
+    red_in = settings.carton_reduction_inch
     all_ct = {}
     for key, c in carton_specs.items():
-        l, w, h = c["l_in"] * MM_PER_INCH, c["w_in"] * MM_PER_INCH, c["h_in"] * MM_PER_INCH
+        l_in_outer = float(c["l_in"])
+        w_in_outer = float(c["w_in"])
+        h_in_outer = float(c["h_in"])
+        calc_l_in = max(0.1, round(l_in_outer - red_in, 2))
+        calc_w_in = max(0.1, round(w_in_outer - red_in, 2))
+        calc_h_in = max(0.1, round(h_in_outer - red_in, 2))
+        l, w, h = calc_l_in * MM_PER_INCH, calc_w_in * MM_PER_INCH, calc_h_in * MM_PER_INCH
         all_ct[key] = CType(key=key, name=c["name"], l=round(l + tol, 1), w=round(w + tol, 1), h=round(h + tol, 1),
-                            label=carton_label_in(c))
+                            label=carton_label_in(c),
+                            outer_l_in=l_in_outer, outer_w_in=w_in_outer, outer_h_in=h_in_outer,
+                            calc_l_in=calc_l_in, calc_w_in=calc_w_in, calc_h_in=calc_h_in)
     allowed_keys = settings.allowed_cartons or list(all_ct.keys())
     allowed = [all_ct[k] for k in allowed_keys if k in all_ct]
     if not allowed:
@@ -217,10 +238,10 @@ def plan(specs, carton_specs, settings: Settings, progress=None):
             excluded.append({"idx": sp.get("idx"), "name": sp.get("name", "?"), "reason": "ignored - invalid box size or quantity"})
             continue
         sku = Sku(idx=sp["idx"], key=str(sp["idx"]), code=sp["code"], name=sp["name"],
-                  l=sp["l"], w=sp["w"], h=sp["h"], qty=sp["boxes"], units_per_inner=sp["upb"])
+                  l=sp["l"], w=sp["w"], h=sp["h"], qty=sp["boxes"], units_per_inner=sp["upb"],
+                  top_up=bool(sp.get("top_up")))
         # per-carton capacity
         home = all_ct.get(sp.get("carton_key") or "")
-        per = sp.get("per_carton")
         if home is None:
             # choose carton type with best single-orientation capacity
             best = None
@@ -229,14 +250,13 @@ def plan(specs, carton_specs, settings: Settings, progress=None):
                 if best is None or g > best[0] or (g == best[0] and ct.vol < best[1].vol):
                     best = (g, ct)
             home = best[1]
-            if per is None:
-                per = best[0]
-        if per is None:
-            per = best_grid_count(sku, home, settings.upright_only)[0]
-        # a full carton must be filled completely: use the largest quantity that physically fits
-        geo = max_capacity(sku, home, settings.upright_only)
-        if geo > 0:
-            per = geo
+
+        geom_cap, _ = best_grid_count(sku, home, settings.upright_only)
+        if settings.fill_full_cartons:
+            per = geom_cap
+        else:
+            per = sp.get("per_carton") or geom_cap
+
         if per <= 0:
             excluded.append({"idx": sp["idx"], "name": sp["name"], "reason": "inner box does not fit in the carton"})
             continue
@@ -251,17 +271,27 @@ def plan(specs, carton_specs, settings: Settings, progress=None):
         if e["n_full"] <= 0:
             continue
         sku, home, per = e["sku"], e["home"], e["per"]
-        ck = (sku.l, sku.w, sku.h, home.key, per, settings.upright_only)
+        ck = (sku.l, sku.w, sku.h, home.key, per, settings.upright_only or sku.top_up)
         if ck not in layout_cache:
-            layout_cache[ck] = full_carton_layout(sku, home, per, mode="uniform", upright_only=settings.upright_only)
+            layout_cache[ck] = full_carton_layout(sku, home, per, mode="per_product", upright_only=settings.upright_only or sku.top_up)
         lay, got = layout_cache[ck]
         note = ""
+        master_per = e["spec"].get("per_carton")
         if got < per:
-            note = (f"Standard master quantity is {per} inner boxes per carton, but the 3D model (single direction, "
-                    f"with margin) fits only {got}. Layout shows {got}; verify the standard before packing.")
+            note = (f"Target capacity is {per} inner boxes per carton, but the 3D model fits only {got}. "
+                    f"Layout shows {got}; verify before packing.")
             warnings.append(f"{sku.name}: {note}")
+        elif master_per and master_per != per:
+            if per > master_per:
+                note = (f"Carton is perfectly filled to 100% full 3D capacity ({per} inner boxes per carton; "
+                        f"master sheet listed {master_per}). Any remaining inner boxes are added to mixed cartons.")
+            else:
+                note = (f"Packed to physical 3D capacity ({per} inner boxes per carton; "
+                        f"master sheet listed {master_per}, but only {per} physically fit).")
+        if sku.top_up:
+            note = (note + " " if note else "") + "Top side facing upward (Versa patch)."
         # carton json (layout uses a single-sku local index 0)
-        one = Sku(0, sku.key, sku.code, sku.name, sku.l, sku.w, sku.h, per, sku.units_per_inner)
+        one = Sku(0, sku.key, sku.code, sku.name, sku.l, sku.w, sku.h, per, sku.units_per_inner, top_up=sku.top_up)
         spec_local = {0: e["spec"]}
         cj = carton_json(lay, [one], spec_local, sku_map={0: sku.idx})
         a, b = carton_no, carton_no + e["n_full"] - 1
@@ -270,6 +300,7 @@ def plan(specs, carton_specs, settings: Settings, progress=None):
             "sku": sku.idx, "code": sku.code, "name": sku.name, "carton_from": a, "carton_to": b,
             "n": e["n_full"], "boxes_per_carton": per, "units_per_inner": sku.units_per_inner,
             "units_per_carton": per * sku.units_per_inner,
+            "top_up": sku.top_up,
             "carton": cj["carton"], "carton_label_in": carton_label_in(carton_specs[home.key]),
             "layout": {"blocks": cj["blocks"], "layers": cj["layers"], "steps": cj["steps"],
                        "contents": cj["contents"], "fill": cj["fill"], "achieved": got},
@@ -289,7 +320,8 @@ def plan(specs, carton_specs, settings: Settings, progress=None):
     pool_skus = []
     for e in mixed_skus:
         s = e["sku"]
-        pool_skus.append(Sku(len(pool_skus), s.key, s.code, s.name, s.l, s.w, s.h, e["rem"], s.units_per_inner))
+        pool_skus.append(Sku(len(pool_skus), s.key, s.code, s.name, s.l, s.w, s.h, e["rem"], s.units_per_inner,
+                             top_up=s.top_up))
         pool_skus[-1].idx = len(pool_skus) - 1
     pool_map = {i: mixed_skus[i]["sku"].idx for i in range(len(pool_skus))}   # pool index -> spec idx
 
@@ -397,6 +429,7 @@ def plan(specs, carton_specs, settings: Settings, progress=None):
                           "units_per_inner": sp["upb"], "per_carton": e["per"], "n_full": e["n_full"],
                           "remainder": e["rem"], "dims": [e["sku"].l, e["sku"].w, e["sku"].h],
                           "home_carton": e["home"].name, "color": sku_color(sp["idx"]),
+                          "top_up": bool(sp.get("top_up")),
                           "source": sp.get("source", "")})
 
     tot_mixed_vol = sum(m["carton"]["l"] * m["carton"]["w"] * m["carton"]["h"] for m in mixed_json)

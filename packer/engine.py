@@ -57,6 +57,7 @@ class Sku:
     h: float
     qty: int
     units_per_inner: int = 0
+    top_up: bool = False
 
     @property
     def dims_s(self):
@@ -71,6 +72,12 @@ class CType:
     w: float
     h: float
     label: str = ""
+    outer_l_in: float = 0.0
+    outer_w_in: float = 0.0
+    outer_h_in: float = 0.0
+    calc_l_in: float = 0.0
+    calc_w_in: float = 0.0
+    calc_h_in: float = 0.0
 
     @property
     def dims_s(self):
@@ -159,8 +166,10 @@ class Packer:
         self.item_vol = (dims[:, 0] * dims[:, 1] * dims[:, 2]).astype(np.float64) if skus else np.zeros(0)
         cs, cp, cA, cB, cC = [], [], [], [], []
         for i in range(self.n):
-            for pid in perms:
-                p = PERMS_ALL[pid]
+            sku_upright = self.upright_only or getattr(skus[i], "top_up", False)
+            for pid, p in enumerate(PERMS_ALL):
+                if sku_upright and p[2] != 2:
+                    continue
                 cs.append(i)
                 cp.append(pid)
                 cA.append(dims[i][p[0]])
@@ -171,7 +180,7 @@ class Packer:
         self.cA = np.array(cA, dtype=np.int64)
         self.cB = np.array(cB, dtype=np.int64)
         self.cC = np.array(cC, dtype=np.int64)
-        self.c_vol = self.item_vol[self.c_sku] if self.n else np.zeros(0)
+        self.c_vol = self.item_vol[self.c_sku] if len(cs) else np.zeros(0)
         self.qty0 = np.array([s.qty for s in skus], dtype=np.int64)
 
     # ------------------------------------------------------------------ one carton
@@ -388,7 +397,9 @@ def optimize(skus, ctypes, mode="uniform", upright_only=False, time_budget=20.0,
     packer = Packer(skus, ctypes, mode=mode, upright_only=upright_only)
     if packer.qty0.sum() == 0:
         return packer, []
-    workers = workers or max(1, (os.cpu_count() or 2))
+    # Cap workers to prevent OOM in container environments (e.g. Railway 512MB RAM limit)
+    max_workers_limit = int(os.environ.get("MAX_WORKERS", "2"))
+    workers = workers or min(max_workers_limit, max(1, (os.cpu_count() or 2)))
     start = time.time()
     best, best_key = None, None
     seed = base_seed
@@ -433,10 +444,11 @@ def optimize(skus, ctypes, mode="uniform", upright_only=False, time_budget=20.0,
 # ------------------------------------------------------------------------------------
 def best_grid_count(sku: Sku, ctype: CType, upright_only=False):
     """Best simple single-orientation grid count (used to validate/derive full-carton capacity)."""
+    upright = upright_only or getattr(sku, "top_up", False)
     X, Y, Z = ctype.dims_s
     best = (0, None)
     for pid, p in enumerate(PERMS_ALL):
-        if upright_only and p[2] != 2:
+        if upright and p[2] != 2:
             continue
         d = sku.dims_s
         a, b, c = d[p[0]], d[p[1]], d[p[2]]
@@ -446,38 +458,40 @@ def best_grid_count(sku: Sku, ctype: CType, upright_only=False):
     return best
 
 
-def max_capacity(sku: Sku, ctype: CType, upright_only=False, tries=40, seed=11):
-    """Largest number of boxes of ONE product (single direction, fully supported) that fit in the carton."""
-    g, _ = best_grid_count(sku, ctype, upright_only)
-    if g <= 0:
-        return 0
-    big = max(2 * g + 10, 20)
-    one = Sku(0, sku.key, sku.code, sku.name, sku.l, sku.w, sku.h, big, sku.units_per_inner)
-    pk = Packer([one], [ctype], mode="uniform", upright_only=upright_only)
-    rng = random.Random(seed)
-    best = g
-    for t in range(tries):
-        try:
-            r = pk.pack_carton(ctype, np.array([big]), rng, noise=0.0 if t == 0 else 0.35)
-            best = max(best, sum(b.count for b in r.blocks))
-        except Exception:
-            break
-    return best
-
-
 def full_carton_layout(sku: Sku, ctype: CType, count: int, mode="per_product", upright_only=False, seed=7):
     """Arrangement of `count` boxes of ONE product in a carton. Returns (Carton, achieved_count)."""
-    one = Sku(0, sku.key, sku.code, sku.name, sku.l, sku.w, sku.h, count, sku.units_per_inner)
-    pk = Packer([one], [ctype], mode=mode, upright_only=upright_only)
+    upright = upright_only or getattr(sku, "top_up", False)
+    one = Sku(0, sku.key, sku.code, sku.name, sku.l, sku.w, sku.h, count, sku.units_per_inner, top_up=upright)
+    pk = Packer([one], [ctype], mode=mode, upright_only=upright)
     rng = random.Random(seed)
     best = None
     # pure grid first (cleanest instructions)
-    cnt, pid = best_grid_count(sku, ctype, upright_only)
+    X, Y, Z = ctype.dims_s
+    best_pid = None
+    best_cnt = 0
+    exact_pid = None
+    for pid_cand, p in enumerate(PERMS_ALL):
+        if upright and p[2] != 2:
+            continue
+        d = one.dims_s
+        a, b, c = d[p[0]], d[p[1]], d[p[2]]
+        c_grid = (X // a) * (Y // b) * (Z // c)
+        if c_grid == count:
+            exact_pid = pid_cand
+            best_pid = pid_cand
+            best_cnt = c_grid
+            break
+        if c_grid > best_cnt:
+            best_cnt = c_grid
+            best_pid = pid_cand
+
+    pid = exact_pid if exact_pid is not None else best_pid
+    cnt = best_cnt
+
     if cnt >= count and pid is not None:
         p = PERMS_ALL[pid]
         d = one.dims_s
         a, b, c = d[p[0]], d[p[1]], d[p[2]]
-        X, Y, Z = ctype.dims_s
         mx, my, mz = X // a, Y // b, Z // c
         blocks = []
         remaining = count
@@ -535,6 +549,9 @@ def validate_carton(carton: Carton, skus):
         p = PERMS_ALL[b[1]]
         if (d[p[0]], d[p[1]], d[p[2]]) != (b[5], b[6], b[7]):
             problems.append("orientation/dims mismatch")
+            break
+        if getattr(skus[b[0]], "top_up", False) and p[2] != 2:
+            problems.append(f"box {skus[b[0]].name} is not positioned with top side facing upward")
             break
     # overlap (pairwise, vectorised)
     n = len(arr)
