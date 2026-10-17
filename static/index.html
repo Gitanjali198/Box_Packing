@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kwik Patch - Carton Packing System</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">&#9638;</span> Kwik Patch <b>Carton Packing System</b></div>
+  <nav id="steps">
+    <button data-step="1" class="active">1 &middot; Upload PI</button>
+    <button data-step="2">2 &middot; Check items</button>
+    <button data-step="3">3 &middot; Settings</button>
+    <button data-step="4">4 &middot; Results</button>
+  </nav>
+</header>
+
+<main>
+<!-- ============================ STEP 1 ============================ -->
+<section id="step1" class="panel">
+  <h2>Upload Proforma Invoice</h2>
+  <p class="muted">Upload the PI Excel file (.xlsx / .xls). If the workbook has several PI sheets you can choose one.</p>
+  <label id="drop" class="drop">
+    <input type="file" id="piFile" accept=".xlsx,.xlsm,.xls" hidden>
+    <div><b>Click to choose</b> or drop the PI file here</div>
+    <div class="muted" id="piName"></div>
+  </label>
+  <div id="sheetBox" class="hidden">
+    <h3>Sheets in this workbook</h3>
+    <div id="sheetList" class="sheetlist"></div>
+  </div>
+  <hr>
+  <h3>Master data</h3>
+  <p class="muted"><span id="masterInfo">loading...</span>
+    <label class="linkbtn">Replace master file<input type="file" id="masterFile" accept=".xlsx" hidden></label></p>
+</section>
+
+<!-- ============================ STEP 2 ============================ -->
+<section id="step2" class="panel hidden">
+  <div class="row between">
+    <div>
+      <h2 id="piTitle">Check items</h2>
+      <p class="muted" id="piSub"></p>
+    </div>
+    <div class="row gap">
+      <button class="btn ghost" id="acceptAll">Accept all suggestions</button>
+      <button class="btn primary" id="toSettings">Continue &rarr;</button>
+    </div>
+  </div>
+  <div id="missingPanel" class="mpanel hidden"></div>
+  <div class="chips">
+    <span class="chip ok" id="cOk"></span><span class="chip warn" id="cRev"></span><span class="chip bad" id="cMiss"></span>
+    <label class="chk" style="margin-left:0"><input type="checkbox" id="onlyYellow" checked> <b>Pack only yellow-highlighted PI lines</b></label>
+    <label class="chk"><input type="checkbox" id="onlyAttn"> show only items needing attention</label>
+  </div>
+  <div class="tablewrap">
+    <table id="itemsTable">
+      <thead><tr><th>#</th><th>Code</th><th>Description (PI)</th><th>Units/box</th><th>Boxes</th><th>Status</th><th>Matched box data</th><th>Action</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============================ STEP 3 ============================ -->
+<section id="step3" class="panel hidden">
+  <div class="row between">
+    <h2>Packing settings</h2>
+    <button class="btn primary big" id="calcBtn">Calculate packing &#9654;</button>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <h3>Box direction rule</h3>
+      <label class="radio"><input type="radio" name="mode" value="uniform" checked>
+        <span><b>One direction for ALL boxes in a carton</b> (recommended)<br>
+        <small>Every inner box in a carton is placed the same way round - simplest for workers.</small></span></label>
+      <label class="radio"><input type="radio" name="mode" value="per_product">
+        <span><b>One direction per product</b><br>
+        <small>All boxes of the same product share a direction; different products may face differently. May save a few more cartons.</small></span></label>
+      <label class="chk"><input type="checkbox" id="upright"> Keep every box upright (height stays vertical, never laid on its side)</label>
+    </div>
+    <div class="card">
+      <h3>Quality &amp; tolerance</h3>
+      <label class="field">Search time (seconds) <small>longer = tighter packing</small>
+        <select id="timeBudget"><option>10</option><option selected>20</option><option>40</option><option>90</option><option>180</option></select></label>
+      <label class="field">Minimum acceptable carton fill (%) <small>cartons below this are flagged</small>
+        <input type="number" id="minFill" value="75" min="30" max="100"></label>
+      <label class="field">Carton tolerance (mm) <small>extra room added to each carton dimension (0 = strict)</small>
+        <input type="number" id="tol" value="0" step="0.5"></label>
+      <label class="field">Box size adjustment (mm) <small>added to every inner-box dimension (master already includes +2 mm margin)</small>
+        <input type="number" id="adj" value="0" step="0.5"></label>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Cartons available for mixed (leftover) packing</h3>
+    <p class="muted">The solver picks the best carton for every mixed carton from the ticked sizes (smaller choice = less freight).</p>
+    <div id="cartonList" class="cartons"></div>
+    <details><summary>Add a custom carton size</summary>
+      <div class="row gap wrap" style="margin-top:8px">
+        <input id="ccName" placeholder="Name" style="width:120px"><input id="ccL" type="number" placeholder="L (in)" step="0.25" style="width:90px">
+        <input id="ccW" type="number" placeholder="W (in)" step="0.25" style="width:90px"><input id="ccH" type="number" placeholder="H (in)" step="0.25" style="width:90px">
+        <button class="btn" id="ccAdd">Add</button></div></details>
+  </div>
+</section>
+
+<!-- ============================ STEP 4 ============================ -->
+<section id="step4" class="panel hidden">
+  <div id="progressBox" class="card hidden">
+    <h3>Calculating the best packing&hellip;</h3>
+    <div class="bar"><div id="barFill"></div></div>
+    <p class="muted" id="progTxt"></p>
+  </div>
+  <div id="results" class="hidden">
+    <div class="row between wrap">
+      <h2>Packing result</h2>
+      <div class="row gap">
+        <a class="btn" id="dlXlsx" href="#">&#128190; Download Excel plan</a>
+        <button class="btn" id="printBtn">&#128424; Print / PDF instructions</button>
+      </div>
+    </div>
+    <div id="summary" class="cards"></div>
+    <div id="warnBox" class="warnbox hidden"></div>
+    <div class="tabs" id="resTabs">
+      <button data-tab="mixed" class="active">Mixed cartons (3D instructions)</button>
+      <button data-tab="list">Packing list</button>
+      <button data-tab="full">Full cartons</button>
+    </div>
+    <div id="tab-mixed"></div>
+    <div id="tab-list" class="hidden"></div>
+    <div id="tab-full" class="hidden"></div>
+  </div>
+</section>
+</main>
+
+<div id="modal" class="modal hidden"><div class="modalbox" id="modalBox"></div></div>
+<div id="printArea"></div>
+<div id="toast" class="toast hidden"></div>
+
+<script src="/static/three.min.js"></script>
+<script src="/static/OrbitControls.js"></script>
+<script src="/static/viewer.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
