@@ -144,21 +144,23 @@ class Service:
                     entry["suggest"] = self.item_json(m.item)
                     entry["candidates"] = [self.item_json(c) for c in m.candidates[:6]]
                     entry["note"] = m.note
-                    good = m.status in ("exact_code", "exact_name", "manual") and not m.note and m.item.has_dims
                     for msg in m.item.issues():
                         entry["issues"].append({"level": "error" if "box size" in msg or "units per inner" in msg else "warn",
                                                 "msg": f"Master sheet row {m.item.row} ('{m.item.name}'): {msg}"})
                     if m.note:
-                        entry["issues"].append({"level": "warn", "msg": m.note + f" (master row {m.item.row})"})
+                        entry["issues"].append({"level": "info", "msg": m.note + f" (master row {m.item.row})"})
                     if m.status == "fuzzy" and not m.note:
                         entry["issues"].append({"level": "warn", "msg": f"Only an approximate name match to master row {m.item.row} '{m.item.name}' - confirm it is the same product."})
-                    if good:
-                        entry["status"] = "ok"
+                    if m.item.has_dims:
+                        # Auto-resolve using master item box dimensions so item is never ignored/dropped
                         entry["resolution"] = {"type": "master", "row": m.item.row}
+                        if m.status in ("exact_code", "exact_name", "manual"):
+                            entry["status"] = "ok"
+                        else:
+                            entry["status"] = "review"
                     else:
                         entry["status"] = "review"
-                        if not m.item.has_dims:
-                            entry["note"] = (entry["note"] + " " if entry["note"] else "") + "master has no box dimensions"
+                        entry["note"] = (entry["note"] + " " if entry["note"] else "") + "master has no box dimensions"
                 else:
                     entry["note"] = m.note
                     entry["issues"].append({"level": "error", "msg": "Product is NOT in the master sheet "

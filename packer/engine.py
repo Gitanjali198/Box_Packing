@@ -397,9 +397,9 @@ def optimize(skus, ctypes, mode="uniform", upright_only=False, time_budget=20.0,
     packer = Packer(skus, ctypes, mode=mode, upright_only=upright_only)
     if packer.qty0.sum() == 0:
         return packer, []
-    # Cap workers to prevent OOM in container environments (e.g. Railway 512MB RAM limit)
-    max_workers_limit = int(os.environ.get("MAX_WORKERS", "2"))
-    workers = workers or min(max_workers_limit, max(1, (os.cpu_count() or 2)))
+    # Cap workers to 1 by default to prevent OOM in container environments (e.g. Railway 512MB RAM limit)
+    max_workers_limit = int(os.environ.get("MAX_WORKERS", "1"))
+    workers = min(max_workers_limit, max(1, (workers or 1)))
     start = time.time()
     best, best_key = None, None
     seed = base_seed

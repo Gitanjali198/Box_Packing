@@ -115,9 +115,7 @@ class Matcher:
                     note = ""
                     if best.units_per_inner and best.units_per_inner != upb:
                         note = f"PI qty/box={upb} but master inner box holds {best.units_per_inner}"
-                    status = "exact_name" if (same_upb or not upb) else "fuzzy"
-                    if note:
-                        status = "fuzzy"
+                    status = "exact_name" if (same_upb or not upb or c) else "fuzzy"
                     return Match(status, best, [x for x in c if x is not best], note)
 
         # 3. fuzzy on names

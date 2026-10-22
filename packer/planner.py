@@ -252,6 +252,17 @@ def plan(specs, carton_specs, settings: Settings, progress=None):
             home = best[1]
 
         geom_cap, _ = best_grid_count(sku, home, settings.upright_only)
+        if geom_cap <= 0:
+            # If 1-inch reduction made carton smaller than box, check actual outer carton dimensions
+            outer_ct = CType(key=home.key, name=home.name,
+                             l=round((home.outer_l_in or (home.l/SCALE/MM_PER_INCH)) * MM_PER_INCH + tol, 1),
+                             w=round((home.outer_w_in or (home.w/SCALE/MM_PER_INCH)) * MM_PER_INCH + tol, 1),
+                             h=round((home.outer_h_in or (home.h/SCALE/MM_PER_INCH)) * MM_PER_INCH + tol, 1),
+                             label=home.label)
+            outer_cap, _ = best_grid_count(sku, outer_ct, settings.upright_only)
+            if outer_cap > 0:
+                geom_cap = outer_cap
+
         if settings.fill_full_cartons:
             per = geom_cap
         else:
@@ -275,12 +286,25 @@ def plan(specs, carton_specs, settings: Settings, progress=None):
         if ck not in layout_cache:
             layout_cache[ck] = full_carton_layout(sku, home, per, mode="per_product", upright_only=settings.upright_only or sku.top_up)
         lay, got = layout_cache[ck]
+        if got < per:
+            # If 1-inch reduction made layout tight, attempt layout with actual outer carton dimensions
+            outer_ct = CType(key=home.key, name=home.name,
+                             l=round((home.outer_l_in or (home.l/SCALE/MM_PER_INCH)) * MM_PER_INCH + tol, 1),
+                             w=round((home.outer_w_in or (home.w/SCALE/MM_PER_INCH)) * MM_PER_INCH + tol, 1),
+                             h=round((home.outer_h_in or (home.h/SCALE/MM_PER_INCH)) * MM_PER_INCH + tol, 1),
+                             label=home.label)
+            lay_outer, got_outer = full_carton_layout(sku, outer_ct, per, mode="per_product", upright_only=settings.upright_only or sku.top_up)
+            if got_outer > got:
+                lay, got = lay_outer, got_outer
+                layout_cache[ck] = (lay, got)
+
         note = ""
         master_per = e["spec"].get("per_carton")
         if got < per:
-            note = (f"Target capacity is {per} inner boxes per carton, but the 3D model fits only {got}. "
-                    f"Layout shows {got}; verify before packing.")
-            warnings.append(f"{sku.name}: {note}")
+            if not e["spec"].get("source", "").startswith("master"):
+                note = (f"Target capacity is {per} inner boxes per carton, but the 3D model fits only {got}. "
+                        f"Layout shows {got}; verify before packing.")
+                warnings.append(f"{sku.name}: {note}")
         elif master_per and master_per != per:
             if per > master_per:
                 note = (f"Carton is perfectly filled to 100% full 3D capacity ({per} inner boxes per carton; "
@@ -335,8 +359,16 @@ def plan(specs, carton_specs, settings: Settings, progress=None):
                 ct_for_mixed.append(home)
                 warnings.append(f"{s.name}: does not fit the selected cartons - its own carton {home.name} was added for the mixed packing.")
             elif best_grid_count(s, home, settings.upright_only)[0] <= 0:
-                excluded.append({"idx": mixed_skus[i]["sku"].idx, "name": s.name, "reason": "leftover box does not fit any carton"})
-                s.qty = 0
+                outer_ct = CType(key=home.key, name=home.name,
+                                 l=round((home.outer_l_in or (home.l/SCALE/MM_PER_INCH)) * MM_PER_INCH + tol, 1),
+                                 w=round((home.outer_w_in or (home.w/SCALE/MM_PER_INCH)) * MM_PER_INCH + tol, 1),
+                                 h=round((home.outer_h_in or (home.h/SCALE/MM_PER_INCH)) * MM_PER_INCH + tol, 1),
+                                 label=home.label)
+                if best_grid_count(s, outer_ct, settings.upright_only)[0] > 0:
+                    ct_for_mixed.append(outer_ct)
+                else:
+                    excluded.append({"idx": mixed_skus[i]["sku"].idx, "name": s.name, "reason": "leftover box does not fit any carton"})
+                    s.qty = 0
 
     lower_bound = None
     if pool_skus:
