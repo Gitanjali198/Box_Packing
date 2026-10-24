@@ -33,8 +33,12 @@
   </div>
   <hr>
   <h3>Master data</h3>
-  <p class="muted"><span id="masterInfo">loading...</span>
-    <label class="linkbtn">Replace master file<input type="file" id="masterFile" accept=".xlsx" hidden></label></p>
+  <p class="muted"><span id="masterInfo">loading...</span></p>
+  <div class="row gap wrap" style="margin-top:8px;align-items:center">
+    <button type="button" class="btn primary small" id="viewMasterBtn">&#128065; View master data</button>
+    <a class="btn ghost small" href="/api/master/download" download="master.xlsx">&#128190; Download master file</a>
+    <label class="btn ghost small" style="cursor:pointer;margin:0">Replace master file<input type="file" id="masterFile" accept=".xlsx" hidden></label>
+  </div>
 </section>
 
 <!-- ============================ STEP 2 ============================ -->

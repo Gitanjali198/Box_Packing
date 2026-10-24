@@ -144,6 +144,24 @@ def missing_template():
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
+@app.route("/api/master/all")
+def master_all():
+    items = [svc.item_json(it) for it in svc.master.items]
+    return jsonify({
+        "items": items,
+        "total": len(items),
+        "cartons": list(svc.cartons().values())
+    })
+
+
+@app.route("/api/master/download")
+def master_download():
+    if os.path.exists(MASTER_PATH):
+        return send_file(MASTER_PATH, as_attachment=True, download_name="master.xlsx",
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    return jsonify({"error": "master file not found"}), 404
+
+
 @app.route("/api/master/export")
 def master_export():
     import io

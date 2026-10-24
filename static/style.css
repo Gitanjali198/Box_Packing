@@ -102,6 +102,7 @@ input,select{font:inherit;padding:6px 8px;border:1px solid var(--line);border-ra
 /* modal */
 .modal{position:fixed;inset:0;background:#0007;display:flex;align-items:center;justify-content:center;z-index:50}
 .modalbox{background:var(--card);border-radius:12px;padding:20px 24px;width:min(640px,94vw);max-height:90vh;overflow:auto}
+.modalbox.wide{width:min(1150px,96vw);max-height:92vh}
 .modalbox h3{margin-top:0}
 .form{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 .form .full{grid-column:1/-1}

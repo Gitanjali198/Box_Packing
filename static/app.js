@@ -33,6 +33,7 @@ async function loadInfo() {
   state.info = await api('/api/info');
   $('#masterInfo').textContent = `Master data loaded: ${state.info.master_items} products, ${state.info.cartons.length} carton sizes.`;
 }
+$('#viewMasterBtn')?.addEventListener('click', viewMasterData);
 $('#piFile').addEventListener('change', e => { if (e.target.files[0]) uploadPI(e.target.files[0]); });
 const drop = $('#drop');
 ['dragover', 'dragenter'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
@@ -149,8 +150,118 @@ $('#toSettings').addEventListener('click', () => {
 
 /* modal helpers */
 function openModal(html) { $('#modalBox').innerHTML = html; $('#modal').classList.remove('hidden'); }
-function closeModal() { $('#modal').classList.add('hidden'); }
+function closeModal() { $('#modal').classList.add('hidden'); $('#modalBox').classList.remove('wide'); }
 $('#modal').addEventListener('click', e => { if (e.target.id === 'modal') closeModal(); });
+
+async function viewMasterData() {
+  openModal(`
+    <div style="padding:16px 8px;text-align:center">
+      <h3>Loading Master Data...</h3>
+      <p class="muted">Fetching catalog items from <code>master.xlsx</code></p>
+    </div>
+  `);
+  try {
+    const data = await api('/api/master/all');
+    renderMasterModal(data);
+  } catch (err) {
+    openModal(`
+      <h3>Failed to load master data</h3>
+      <p class="bad">${esc(err.message)}</p>
+      <div class="row gap" style="justify-content:flex-end;margin-top:16px"><button class="btn" onclick="closeModal()">Close</button></div>
+    `);
+  }
+}
+
+function renderMasterModal(data) {
+  const items = data.items || [];
+  const html = `
+    <div style="padding:4px 0">
+      <div class="row between wrap gap" style="margin-bottom:14px;align-items:center">
+        <div>
+          <h2 style="margin:0 0 4px 0">Master Data Catalog (${items.length} products)</h2>
+          <p class="muted" style="margin:0">Loaded from <code>data/master.xlsx</code> &middot; ${data.cartons?.length || 0} outer carton types</p>
+        </div>
+        <div class="row gap wrap" style="align-items:center">
+          <input type="text" id="mCatalogSearch" placeholder="&#128269; Search code, product, carton..." style="padding:7px 12px;border:1px solid var(--line);border-radius:6px;width:240px;font-size:13px">
+          <a class="btn ghost small" href="/api/master/download" download="master.xlsx">&#128190; Download .xlsx</a>
+          <button class="btn small" onclick="closeModal()">Close</button>
+        </div>
+      </div>
+
+      <div class="tablewrap" style="max-height:65vh;overflow-y:auto;border:1px solid var(--line);border-radius:8px">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead style="position:sticky;top:0;background:var(--card);z-index:2;box-shadow:0 1px 0 var(--line)">
+            <tr>
+              <th style="padding:9px 10px;text-align:left;width:40px">#</th>
+              <th style="padding:9px 10px;text-align:left">Item Code</th>
+              <th style="padding:9px 10px;text-align:left">Product Name</th>
+              <th style="padding:9px 10px;text-align:center">Top Up</th>
+              <th style="padding:9px 10px;text-align:left">Inner Box (L&times;W&times;H mm)</th>
+              <th style="padding:9px 10px;text-align:center">Units/Inner</th>
+              <th style="padding:9px 10px;text-align:center">Inner/Carton</th>
+              <th style="padding:9px 10px;text-align:left">Outer Carton Size (in)</th>
+              <th style="padding:9px 10px;text-align:left">Carton Name</th>
+            </tr>
+          </thead>
+          <tbody id="mCatalogBody"></tbody>
+        </table>
+      </div>
+      <div class="row between" style="margin-top:12px;font-size:12px;color:var(--muted);align-items:center">
+        <span id="mCatalogCount">Showing ${items.length} of ${items.length} products</span>
+        <button class="btn ghost small" onclick="closeModal()">Close</button>
+      </div>
+    </div>
+  `;
+  openModal(html);
+  $('#modalBox').classList.add('wide');
+
+  const searchInput = $('#mCatalogSearch');
+  const tbody = $('#mCatalogBody');
+  const countSpan = $('#mCatalogCount');
+
+  const renderRows = (list) => {
+    countSpan.textContent = `Showing ${list.length} of ${items.length} products`;
+    if (!list.length) {
+      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:28px;color:var(--muted)">No matching products found.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = list.map(it => {
+      const dims = it.has_dims ? `${it.l} &times; ${it.w} &times; ${it.h}` : '<span class="chip bad" style="font-size:10px;padding:1px 5px">Missing</span>';
+      const pos = it.top_up ? '<span class="chip ok" style="font-size:10px;padding:2px 6px">&#8679; Top Up</span>' : '<span style="color:var(--muted)">-</span>';
+      const cartonLabel = it.carton_label || it.carton_key || '-';
+      return `
+        <tr style="border-bottom:1px solid var(--line)">
+          <td style="padding:7px 10px;color:var(--muted)">${it.row}</td>
+          <td style="padding:7px 10px;font-weight:600">${esc(it.code || '-')}</td>
+          <td style="padding:7px 10px">${esc(it.name || '')}</td>
+          <td style="padding:7px 10px;text-align:center">${pos}</td>
+          <td style="padding:7px 10px;font-family:monospace">${dims}</td>
+          <td style="padding:7px 10px;text-align:center">${it.units_per_inner ?? '-'}</td>
+          <td style="padding:7px 10px;text-align:center">${it.inner_per_carton ?? '-'}</td>
+          <td style="padding:7px 10px">${esc(cartonLabel)}</td>
+          <td style="padding:7px 10px"><span class="chip" style="font-size:11px">${esc(it.carton || '-')}</span></td>
+        </tr>
+      `;
+    }).join('');
+  };
+
+  renderRows(items);
+
+  searchInput.addEventListener('input', () => {
+    const q = searchInput.value.trim().toLowerCase();
+    if (!q) { renderRows(items); return; }
+    const filtered = items.filter(it => {
+      const code = (it.code || '').toLowerCase();
+      const name = (it.name || '').toLowerCase();
+      const carton = (it.carton || '').toLowerCase();
+      const cLabel = (it.carton_label || '').toLowerCase();
+      const dims = `${it.l}x${it.w}x${it.h}`.toLowerCase();
+      return code.includes(q) || name.includes(q) || carton.includes(q) || cLabel.includes(q) || dims.includes(q);
+    });
+    renderRows(filtered);
+  });
+  searchInput.focus();
+}
 
 function openSearch(en) {
   openModal(`<h3>Find in master data</h3><p class="muted">For: <b>${esc(en.line.name)}</b> (${en.line.units_per_box} units/box)</p>
