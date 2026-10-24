@@ -326,18 +326,20 @@ async function startCalc() {
   if (!keys.length) return alert('Select at least one carton size.');
   state.allowed = keys;
   const settings = {
-    mode: $('input[name=mode]:checked').value, upright_only: $('#upright').checked,
+    mode: $('input[name=mode]:checked') ? $('input[name=mode]:checked').value : 'uniform',
+    upright_only: $('#upright') ? $('#upright').checked : false,
     fill_full_cartons: $('input[name=fullCartonCap]:checked') ? $('input[name=fullCartonCap]:checked').value === 'geom' : true,
-    carton_tolerance_mm: +$('#tol').value || 0,
+    carton_tolerance_mm: $('#tol') ? (+$('#tol').value || 0) : 0,
     carton_reduction_inch: $('#cartonReduction') ? (+$('#cartonReduction').value || 1.0) : 1.0,
     allowed_cartons: keys,
-    min_fill: (+$('#minFill').value || 75) / 100, time_budget: +$('#timeBudget').value
+    min_fill: ($('#minFill') ? (+$('#minFill').value || 75) : 75) / 100,
+    time_budget: $('#timeBudget') ? (+$('#timeBudget').value || 20) : 20
   };
   const lines = state.entries.map(e => ({ line: e.line, resolution: e.resolution, skip: e.skip }));
   state.maxStep = 4; enableSteps(); showStep(4);
   $('#results').classList.add('hidden'); $('#progressBox').classList.remove('hidden'); $('#barFill').style.width = '3%';
   try {
-    const r = await post('/api/solve', { lines, settings, margin_adjust: +$('#adj').value || 0,
+    const r = await post('/api/solve', { lines, settings, margin_adjust: $('#adj') ? (+$('#adj').value || 0) : 0,
       meta: { title: state.parsed.title, consignee: state.parsed.consignee, file: state.filename } });
     state.jobId = r.job; pollJob(settings.time_budget);
   } catch (ex) { alert(ex.message); showStep(3); }
